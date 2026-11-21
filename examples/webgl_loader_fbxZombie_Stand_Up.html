@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - FBX loader - Zombie Stand Up</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body { margin: 0; overflow: hidden; background: #a0a0a0; font-family: Monospace; }
+			#info { position: absolute; top: 10px; width: 100%; text-align: center; z-index: 100; pointer-events: none; }
+		</style>
+	</head>
+
+	<body>
+		<div id="info">three.js - FBXLoader - Zombie Stand Up<br />Character and animation from Mixamo</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+			import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			const manager = new THREE.LoadingManager();
+
+			let camera, scene, renderer, controls, stats, object, loader, guiMorphsFolder, guiAnimationsFolder;
+			let mixer;
+
+			const timer = new THREE.Timer();
+			timer.connect( document );
+
+			const params = {
+				asset: 'character',
+			};
+
+			const assets = [
+				'character',
+			];
+
+			const scales = new Map();
+
+			// ====== RUTAS Y OPCIONES (aquí cambias ambiente, audio, piso, textura y animación) ======
+			const RUTA_AMBIENTE = 'models/exr/rogland_overcast_4k.exr';
+			const RUTA_AUDIO = 'models/audio/musica.mp3';
+			const RUTA_TEXTURA_PISO = 'models/textures/piso.jpg';
+			const USAR_TEXTURA_PROPIA = false;   // false = usa la textura original del FBX
+			const RUTA_TEXTURA_MODELO = 'models/textures/zombie.png';
+			const RUTA_ANIMACION = 'models/fbx/Zombie Stand Up.fbx';   // FBX del que se toma la animación
+
+			init();
+
+			function init() {
+
+				const container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.set( 100, 200, 300 );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xa0a0a0 );
+
+				const hemiLight = new THREE.HemisphereLight( 0xffffff, 0x444444, 1 );
+				hemiLight.position.set( 0, 200, 0 );
+				scene.add( hemiLight );
+
+				const dirLight = new THREE.DirectionalLight( 0xffffff, 2 );
+				dirLight.position.set( 0, 200, 100 );
+				dirLight.castShadow = true;
+				dirLight.shadow.camera.top = 180;
+				dirLight.shadow.camera.bottom = - 100;
+				dirLight.shadow.camera.left = - 120;
+				dirLight.shadow.camera.right = 120;
+				scene.add( dirLight );
+
+				// ===== AMBIENTE HDR/EXR =====
+				new EXRLoader().load( RUTA_AMBIENTE, function ( texture ) {
+
+					texture.mapping = THREE.EquirectangularReflectionMapping;
+					scene.background = texture;
+					scene.environment = texture;
+
+				} );
+
+				// ===== PISO CON TEXTURA (área cuadrada) =====
+				const texturaPiso = new THREE.TextureLoader().load( RUTA_TEXTURA_PISO );
+				texturaPiso.colorSpace = THREE.SRGBColorSpace;
+				texturaPiso.wrapS = THREE.RepeatWrapping;
+				texturaPiso.wrapT = THREE.RepeatWrapping;
+				texturaPiso.repeat.set( 4, 4 );
+
+				const mesh = new THREE.Mesh( new THREE.PlaneGeometry( 400, 400 ), new THREE.MeshStandardMaterial( { map: texturaPiso, roughness: 0.8, metalness: 0 } ) );
+				mesh.rotation.x = - Math.PI / 2;
+				mesh.receiveShadow = true;
+				scene.add( mesh );
+
+				// ===== AUDIO =====
+				const listener = new THREE.AudioListener();
+				camera.add( listener );
+
+				const sound = new THREE.Audio( listener );
+				new THREE.AudioLoader().load( RUTA_AUDIO, function ( buffer ) {
+
+					sound.setBuffer( buffer );
+					sound.setLoop( true );
+					sound.setVolume( 0.5 );
+					sound.play();
+					console.log( 'Audio cargado' );
+
+				} );
+
+				// Los navegadores bloquean el audio hasta que hay un clic
+				const activarAudio = function () {
+
+					if ( listener.context.state === 'suspended' ) listener.context.resume();
+
+				};
+				window.addEventListener( 'pointerdown', activarAudio );
+				window.addEventListener( 'keydown', activarAudio );
+
+				loader = new FBXLoader( manager );
+				loadAsset( params.asset );
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				container.appendChild( renderer.domElement );
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.enableZoom = false;
+				controls.enablePan = false;
+				controls.enableDamping = true;
+				controls.target.set( 0, 100, 0 );
+				controls.update();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				// stats
+				stats = new Stats();
+				container.appendChild( stats.dom );
+
+				const gui = new GUI();
+				gui.add( params, 'asset', assets ).onChange( function ( value ) {
+
+					loadAsset( value );
+
+				} );
+
+				guiMorphsFolder = gui.addFolder( 'Morphs' ).hide();
+				guiAnimationsFolder = gui.addFolder( 'Animations' ).hide();
+
+			}
+
+			function loadAsset( asset ) {
+
+				loader.load( 'models/fbx/' + asset + '.fbx', function ( group ) {
+
+					if ( object ) {
+
+						object.traverse( function ( child ) {
+
+							if ( child.isSkinnedMesh ) {
+
+								child.skeleton.dispose();
+
+							}
+
+							if ( child.material ) {
+
+								const materials = Array.isArray( child.material ) ? child.material : [ child.material ];
+								materials.forEach( material => {
+
+									if ( material.map ) material.map.dispose();
+									material.dispose();
+
+								} );
+
+							}
+
+							if ( child.geometry ) child.geometry.dispose();
+
+						} );
+
+						scene.remove( object );
+
+					}
+
+					//
+
+					object = group;
+
+					const scale = scales.get( asset );
+					object.scale.setScalar( scale || 1 );
+
+					guiAnimationsFolder.children.forEach( ( child ) => child.destroy() );
+					guiAnimationsFolder.hide();
+
+					mixer = null;
+
+					guiMorphsFolder.children.forEach( ( child ) => child.destroy() );
+					guiMorphsFolder.hide();
+
+					object.traverse( function ( child ) {
+
+						if ( child.isMesh ) {
+
+							child.castShadow = true;
+							child.receiveShadow = true;
+
+							// ===== TEXTURA DEL MODELO =====
+							if ( USAR_TEXTURA_PROPIA ) {
+
+								const texturaModelo = new THREE.TextureLoader().load( RUTA_TEXTURA_MODELO );
+								texturaModelo.colorSpace = THREE.SRGBColorSpace;
+								child.material = new THREE.MeshStandardMaterial( { map: texturaModelo, roughness: 0.6, metalness: 0.1 } );
+
+							}
+
+							if ( child.morphTargetDictionary ) {
+
+								guiMorphsFolder.show();
+								const meshFolder = guiMorphsFolder.addFolder( child.name || child.uuid );
+								Object.keys( child.morphTargetDictionary ).forEach( ( key ) => {
+
+									meshFolder.add( child.morphTargetInfluences, child.morphTargetDictionary[ key ], 0, 1, 0.01 );
+
+								} );
+
+							}
+
+						}
+
+					} );
+
+					scene.add( object );
+
+					cargarAnimacion( object );
+
+				} );
+
+			}
+
+			// ===== ANIMACIÓN: se toma de otro FBX y se aplica al personaje =====
+			function cargarAnimacion( modelo ) {
+
+				loader.load( RUTA_ANIMACION, function ( animFbx ) {
+
+					const clips = animFbx.animations;
+
+					if ( ! clips || ! clips.length ) {
+
+						console.warn( 'El archivo de animación no contiene clips:', RUTA_ANIMACION );
+						return;
+
+					}
+
+					// Se elige el clip más largo (evita el clip vacío "Take 001")
+					let clip = clips[ 0 ];
+					clips.forEach( ( c ) => { if ( c.duration > clip.duration ) clip = c; } );
+
+					mixer = new THREE.AnimationMixer( modelo );
+					mixer.clipAction( clip ).play();
+
+					const animationParams = { clip: clip.name };
+
+					guiAnimationsFolder.show();
+					guiAnimationsFolder.add( animationParams, 'clip', clips.map( ( c ) => c.name ) ).onChange( function ( name ) {
+
+						mixer.stopAllAction();
+
+						const nuevo = THREE.AnimationClip.findByName( clips, name );
+						mixer.clipAction( nuevo ).play();
+
+					} );
+
+					console.log( 'Animación aplicada:', clip.name, '(' + clip.duration.toFixed( 2 ) + ' s)' );
+
+				} );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function animate() {
+
+				timer.update();
+
+				const delta = timer.getDelta();
+
+				if ( mixer ) mixer.update( delta );
+
+				controls.update();
+
+				renderer.render( scene, camera );
+
+				stats.update();
+
+			}
+
+		</script>
+
+	</body>
+</html>
