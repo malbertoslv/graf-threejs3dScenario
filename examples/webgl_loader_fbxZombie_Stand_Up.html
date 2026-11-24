@@ -7,11 +7,13 @@
 		<style>
 			body { margin: 0; overflow: hidden; background: #a0a0a0; font-family: Monospace; }
 			#info { position: absolute; top: 10px; width: 100%; text-align: center; z-index: 100; pointer-events: none; }
+			#estado { position: absolute; bottom: 10px; left: 10px; right: 10px; z-index: 100; pointer-events: none; color: #fff; background: rgba(0,0,0,0.6); padding: 8px; font-size: 12px; white-space: pre-wrap; }
 		</style>
 	</head>
 
 	<body>
 		<div id="info">three.js - FBXLoader - Zombie Stand Up<br />Character and animation from Mixamo</div>
+		<div id="estado">Cargando recursos...</div>
 
 		<script type="importmap">
 			{
@@ -33,7 +35,31 @@
 			import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
+			// ====== MENSAJES EN PANTALLA (para ver errores sin abrir F12) ======
+			const estadoDiv = document.getElementById( 'estado' );
+
+			function mostrar( msg ) {
+
+				console.log( msg );
+				estadoDiv.textContent = msg;
+
+			}
+
+			function mostrarError( msg, err ) {
+
+				console.error( msg, err );
+				estadoDiv.style.background = 'rgba(160,0,0,0.85)';
+				estadoDiv.textContent = msg + '\n' + ( err && err.message ? err.message : ( err || '' ) );
+
+			}
+
 			const manager = new THREE.LoadingManager();
+
+			manager.onError = function ( url ) {
+
+				mostrarError( 'No se pudo cargar: ' + url );
+
+			};
 
 			let camera, scene, renderer, controls, stats, object, loader, guiMorphsFolder, guiAnimationsFolder;
 			let mixer;
@@ -57,7 +83,8 @@
 			const RUTA_TEXTURA_PISO = 'models/textures/piso.jpg';
 			const USAR_TEXTURA_PROPIA = false;   // false = usa la textura original del FBX
 			const RUTA_TEXTURA_MODELO = 'models/textures/zombie.png';
-			const RUTA_ANIMACION = 'models/fbx/Zombie Stand Up.fbx';   // FBX del que se toma la animación
+			// encodeURI convierte los espacios en %20 para que funcione en GitHub Pages
+			const RUTA_ANIMACION = encodeURI( 'models/fbx/Zombie Stand Up.fbx' );   // FBX del que se toma la animación
 
 			init();
 
@@ -92,10 +119,18 @@
 					scene.background = texture;
 					scene.environment = texture;
 
+				}, undefined, function ( err ) {
+
+					mostrarError( 'Error cargando el ambiente EXR: ' + RUTA_AMBIENTE, err );
+
 				} );
 
 				// ===== PISO CON TEXTURA (área cuadrada) =====
-				const texturaPiso = new THREE.TextureLoader().load( RUTA_TEXTURA_PISO );
+				const texturaPiso = new THREE.TextureLoader().load( RUTA_TEXTURA_PISO, undefined, undefined, function ( err ) {
+
+					mostrarError( 'Error cargando la textura del piso: ' + RUTA_TEXTURA_PISO, err );
+
+				} );
 				texturaPiso.colorSpace = THREE.SRGBColorSpace;
 				texturaPiso.wrapS = THREE.RepeatWrapping;
 				texturaPiso.wrapT = THREE.RepeatWrapping;
@@ -118,6 +153,10 @@
 					sound.setVolume( 0.5 );
 					sound.play();
 					console.log( 'Audio cargado' );
+
+				}, undefined, function ( err ) {
+
+					mostrarError( 'Error cargando el audio: ' + RUTA_AUDIO, err );
 
 				} );
 
@@ -168,7 +207,10 @@
 
 			function loadAsset( asset ) {
 
-				loader.load( 'models/fbx/' + asset + '.fbx', function ( group ) {
+				const rutaModelo = 'models/fbx/' + asset + '.fbx';
+				mostrar( 'Cargando modelo: ' + rutaModelo + ' (puede tardar, pesa ~109 MB)...' );
+
+				loader.load( rutaModelo, function ( group ) {
 
 					if ( object ) {
 
@@ -248,8 +290,21 @@
 					} );
 
 					scene.add( object );
+					mostrar( 'Modelo cargado correctamente. Cargando animación...' );
 
 					cargarAnimacion( object );
+
+				}, function ( xhr ) {
+
+					if ( xhr.lengthComputable ) {
+
+						mostrar( 'Descargando modelo: ' + Math.round( xhr.loaded / xhr.total * 100 ) + ' %' );
+
+					}
+
+				}, function ( err ) {
+
+					mostrarError( 'Error cargando el modelo: ' + rutaModelo, err );
 
 				} );
 
@@ -264,7 +319,7 @@
 
 					if ( ! clips || ! clips.length ) {
 
-						console.warn( 'El archivo de animación no contiene clips:', RUTA_ANIMACION );
+						mostrarError( 'El archivo de animación no contiene clips: ' + RUTA_ANIMACION );
 						return;
 
 					}
@@ -288,7 +343,12 @@
 
 					} );
 
-					console.log( 'Animación aplicada:', clip.name, '(' + clip.duration.toFixed( 2 ) + ' s)' );
+					mostrar( 'Animación aplicada: ' + clip.name + ' (' + clip.duration.toFixed( 2 ) + ' s)' );
+					setTimeout( function () { estadoDiv.style.display = 'none'; }, 3000 );
+
+				}, undefined, function ( err ) {
+
+					mostrarError( 'Error cargando la animación: ' + RUTA_ANIMACION, err );
 
 				} );
 
